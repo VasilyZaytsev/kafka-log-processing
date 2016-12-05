@@ -20,11 +20,13 @@ JSON-список, в котором >= 0 записей, для каждой и
 ### Start environment
 
 1. Start Zookeeper
+
     ````
     cd %KAFKA_HOME
     > bin\windows\zookeeper-server-start.bat config\zookeeper.properties
     ````
 1. Start Kafka
+
     ````
     cd %KAFKA_HOME
     > dir bin\windows\kafka-server-start.bat config\server.properties
@@ -33,6 +35,7 @@ JSON-список, в котором >= 0 записей, для каждой и
 ### Run application 
 Before run applications environment should be started 
 1. From project root folder
+
     ```
     > sbt run
     Multiple main classes detected, select one to run:
