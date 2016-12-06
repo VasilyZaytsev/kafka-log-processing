@@ -43,3 +43,8 @@ class EZooKeeper extends LazyLogging {
   val hostname: String = connectString.splitAt(connectString lastIndexOf ':')._1
 
 }
+
+object EZooKeeper {
+  private val instance = new EZooKeeper
+  def apply(): EZooKeeper = instance
+}
