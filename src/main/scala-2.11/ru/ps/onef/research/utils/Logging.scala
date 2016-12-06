@@ -1,4 +1,4 @@
-package ru.ps.onef.research
+package ru.ps.onef.research.utils
 
 /**
   * Created by Vasily.Zaytsev on 05.12.2016.

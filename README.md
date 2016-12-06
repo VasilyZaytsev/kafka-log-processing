@@ -54,6 +54,7 @@ Before run applications environment should be started
     
     Enter number: > 2 (Secondly start producer)
     ```
+    
 ### Configure 
 For project configuration used [typesafe config](https://github.com/typesafehub/config)
 Default [configuration file is reference.conf](./src/main/resources/reference.conf)

@@ -4,25 +4,16 @@ import java.util.Properties
 
 import com.typesafe.config.ConfigFactory
 import org.apache.kafka.clients.producer.{KafkaProducer, ProducerRecord}
+import ru.ps.onef.research.utils
 
 /**
   * Created by Vasily.Zaytsev on 01.12.2016.
   */
 object LogsProducer {
-  private val producerConf = ConfigFactory load() getConfig "kafka.log.producer"
-  implicit val defaultTopic: String = producerConf getString "topic"
+  private val conf = ConfigFactory load()
+  implicit val defaultTopic: String = conf getString "log.producer.topic"
 
-  private val props = new Properties()
-  props put("bootstrap.servers", producerConf getString "bootstrap.servers")
-  props put("acks", "all")
-  props put("retries", 3.toString)
-  props put("batch.size", 16384.toString)
-  props put("linger.ms", 1.toString)
-  props put("buffer.memory", 33554432.toString)
-  props put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer")
-  props put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer")
-
-  private val producer = new KafkaProducer[String, String](props)
+  private val producer = new KafkaProducer[String, String](utils.propsFromConfig(conf getConfig "log.producer"))
 
   def send(message: String)(implicit topic: String): Unit = send(List(message))(topic)
 
