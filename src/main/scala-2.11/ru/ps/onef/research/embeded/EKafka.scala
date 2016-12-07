@@ -6,7 +6,7 @@ import java.util.Properties
 import com.typesafe.config.ConfigFactory
 import kafka.admin.AdminUtils
 import kafka.server.{KafkaConfig, KafkaServerStartable}
-import kafka.utils.ZKStringSerializer
+import kafka.utils.ZkUtils
 import org.apache.commons.io.FileUtils
 import ru.ps.onef.research.utils
 import ru.ps.onef.research.utils.LazyLogging
@@ -86,19 +86,18 @@ class EKafka extends LazyLogging {
     logger.debug(s"Shutdown of embedded Kafka broker at $brokerList completed (with ZK server at $zookeeperConnect)")
   }
 
-//  def createTopic(topic: String, partitions: Int = 1, replicationFactor: Int = 1, config: Properties = new Properties): Unit = {
-//    logger.debug(s"Creating topic { name: $topic, partitions: $partitions, replicationFactor: $replicationFactor, config: $config }")
-//    val sessionTimeout = 10.seconds
-//    val connectionTimeout = 8.seconds
-//    // Note: You must initialize the ZkClient with ZKStringSerializer.  If you don't, then createTopic() will only
-//    // seem to work (it will return without error).  Topic will exist in only ZooKeeper, and will be returned when
-//    // listing topics, but Kafka itself does not create the topic.
-//    val zkClient = new ZkClient(zookeeperConnect, sessionTimeout.toMillis.toInt, connectionTimeout.toMillis.toInt,
-//      ZKStringSerializer)
-//    AdminUtils.createTopic(zkClient, topic, partitions, replicationFactor, config)
-//    zkClient.close()
-//  }
-
+  def createTopic(topic: String, partitions: Int = 1, replicationFactor: Int = 1, config: Properties = new Properties): Unit = {
+    logger.debug(s"Creating topic { name: $topic, partitions: $partitions, replicationFactor: $replicationFactor, config: $config }")
+    val sessionTimeout = 10.seconds
+    val connectionTimeout = 8.seconds
+    // Note: If you get a warning like this:
+    //WARN Error while fetching metadata with correlation id 0 : {log.producer=LEADER_NOT_AVAILABLE} (org.apache.kafka.clients.NetworkClient)
+    //It means that you should create a topic before sending a messages to them.
+    //More details can be found here
+    //http://stackoverflow.com/questions/35788697/leader-not-available-kafka-in-console-producer
+    val zku = ZkUtils(zookeeperConnect, sessionTimeout.toMillis.toInt, connectionTimeout.toMillis.toInt, false)
+    AdminUtils.createTopic(zku, topic, partitions, replicationFactor, config)
+  }
 }
 
 object EKafka {

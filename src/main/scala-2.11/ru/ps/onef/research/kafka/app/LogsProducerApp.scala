@@ -15,6 +15,6 @@ object LogsProducerApp extends App {
 
   (1 to 100).toList.map{ n => LogMessage(TRACE, "Message " + n, 0L) }.grouped(batchSize).foreach { listMsgs =>
     println("Sending message batch size " + listMsgs.length)
-    LogsProducer.send( Json.stringify(Json.toJson(listMsgs)) )
+    LogsProducer send { Json.stringify(Json.toJson(listMsgs)) }
   }
 }
