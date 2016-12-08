@@ -17,6 +17,12 @@ JSON-список, в котором >= 0 записей, для каждой и
 Работу системы необходимо покрыть автоматизированными тестами **R0**.
 
 ## How to 
+### Run test
+All test run in memory and automatically setup infrastructure (Zookeeper, Kafka, Storm) also in memory 
+```
+sbt test
+```
+
 ### Start environment
 
 1. Start Zookeeper

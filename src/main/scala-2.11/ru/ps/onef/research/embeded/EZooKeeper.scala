@@ -14,7 +14,7 @@ class EZooKeeper extends LazyLogging {
 
   private val conf = ConfigFactory load()
   private val zooKeeperConf = conf getConfig "infrastructure.zookeeper"
-  private val port = zooKeeperConf getInt "port"
+  val port: Int = zooKeeperConf getInt "port"
 
   logger.debug(s"Starting embedded ZooKeeper server on port $port...")
 

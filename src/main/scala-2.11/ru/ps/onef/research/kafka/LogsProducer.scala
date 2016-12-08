@@ -16,7 +16,7 @@ object LogsProducer {
   implicit val defaultTopic: String = conf getString "log.producer.topic"
 
   private val producer ={
-    new KafkaProducer[String, String](utils.propsFromConfig(conf getConfig "log.producer.client.config"))
+    new KafkaProducer[String, String](utils.propsFromConfig(conf getConfig "log.producer.config"))
   }
 
   def send(message: List[LogMessage])(implicit topic: String): Seq[Future[RecordMetadata]] = {
