@@ -4,6 +4,7 @@ version := "1.0"
 
 scalaVersion := "2.11.8"
 val stormVersion = "1.0.2"
+val dockerTestkitVersion = "0.9.0-RC1"
 
 libraryDependencies ++= Seq(
   "org.apache.kafka" % "kafka_2.11" % "0.10.1.0"
@@ -18,5 +19,8 @@ libraryDependencies ++= Seq(
   "org.apache.curator" % "curator-test" % "3.2.1"
     exclude("org.jboss.netty", "netty")
     exclude("org.slf4j", "slf4j-log4j12"),
-  "ch.qos.logback" % "logback-classic" % "1.1.2"
+  "com.whisk" %% "docker-testkit-scalatest" % dockerTestkitVersion % "test",
+  "com.whisk" %% "docker-testkit-config" % dockerTestkitVersion % "test",
+  "com.whisk" %% "docker-testkit-impl-spotify" % dockerTestkitVersion % "test",
+"ch.qos.logback" % "logback-classic" % "1.1.2"
 )

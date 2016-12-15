@@ -10,6 +10,9 @@ import org.apache.storm.{Config, ILocalCluster, Testing}
 import org.apache.storm.kafka.{KafkaSpout, SpoutConfig, ZkHosts}
 import org.apache.storm.testing.{MkClusterParam, TestJob}
 import org.apache.storm.topology.TopologyBuilder
+import org.scalatest.concurrent.ScalaFutures
+import org.scalatest.time.{Second, Seconds, Span}
+import ru.ps.onef.research.docker.{DockerHBaseService, DockerTestKitDockerEnv}
 import ru.ps.onef.research.storm.SimpleUpdateBolt
 
 import scala.concurrent.{Await, Future}
@@ -19,7 +22,9 @@ import scala.concurrent.ExecutionContext.Implicits.global
 /**
   * Created by Vasily.Zaytsev on 06.12.2016.
   */
-class TestProducerConsumer extends WordSpecLike with Matchers with BeforeAndAfterAll {
+class TestProducerConsumer extends WordSpecLike
+  with Matchers with BeforeAndAfterAll with ScalaFutures
+  with DockerTestKitDockerEnv with DockerHBaseService {
 
   val outputTopicName = "processed-logs"
   val inputTopicName = "raw-logs"
@@ -29,6 +34,7 @@ class TestProducerConsumer extends WordSpecLike with Matchers with BeforeAndAfte
   private var consumerInstance: Option[ConsoleLogsConsumer] = None
 
   override def beforeAll {
+    super.beforeAll()
     EZooKeeper()
     EKafka().start()
 
@@ -43,6 +49,16 @@ class TestProducerConsumer extends WordSpecLike with Matchers with BeforeAndAfte
     Seq(consumerInstance, stormConsumerInstance).foreach(_.foreach(_.shutdown()))
     EKafka().stop()
     EZooKeeper().stop()
+    super.afterAll()
+  }
+
+  implicit val pc = PatienceConfig(Span(20, Seconds), Span(1, Second))
+
+  "all containers" should {
+    "be ready at the same time" in {
+      dockerContainers.map(_.image).foreach(println)
+      dockerContainers.forall(isContainerReady(_).futureValue) shouldBe true
+    }
   }
 
   "Kafka test" should {

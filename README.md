@@ -18,7 +18,8 @@ JSON-список, в котором >= 0 записей, для каждой и
 
 ## How to 
 ### Run test
-All test run in memory and automatically setup infrastructure (Zookeeper, Kafka, Storm) also in memory 
+All test run in memory and automatically setup infrastructure (Zookeeper, Kafka, Storm) also in memory
+Accordance to support docker console environment should be setup with docker settings 
 ```
 sbt test
 ```
@@ -65,6 +66,56 @@ Before run applications environment should be started
 For project configuration used [typesafe config](https://github.com/typesafehub/config)
 Default [configuration file is reference.conf](./src/main/resources/reference.conf)
 
+### HBase
+
+#### Docker
+**Build:**
+````
+docker build -t local-hbase .
+````
+
+**Run:**
+Before run you should update hosts with alias
+````
+        192.168.99.100  hbase-docker
+````
+ Where 192.168.99.100 is a 
+```` 
+    > docker-machine ip default  
+````
+and default is a target docker machine
+
+Also you provide shared directory
+http://stackoverflow.com/questions/33312662/docker-toolbox-mount-file-on-windows
+````
+run-image
+````
+
+**Connect:**
+````
+docker run --rm -it --link IMAGE_ID:hbase-docker local-hbase hbase shell
+http://hbase-docker:60010/master-status
+
+````
+for exposed ports see run-image and dockerfile
+
+**Inspired with:**
+https://github.com/nerdammer/dockers/tree/master/hbase-1.1.0.1
+https://github.com/dajobe/hbase-docker
+
+**FIXES**
+https://github.com/docker/kitematic/issues/519
+docker-machine regenerate-certs default
+
+https://github.com/docker/docker/issues/27734
+Update to VirtualBox Version 5.1.10 
+
+https://github.com/docker/toolbox/issues/80
+Fixed with VB update and set volume like 
+/c/Users/Vasily.Zaytsev/docker/valume2
+Payattention that folder should be placed at user home
+
 ## What are done
 * R1
 * R2
+
