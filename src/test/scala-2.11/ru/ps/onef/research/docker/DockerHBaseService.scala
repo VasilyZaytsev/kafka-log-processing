@@ -13,8 +13,11 @@ trait DockerHBaseService extends DockerKit {
 
   def dockerConfig: Config = ConfigFactory.load()
 
-  val hbaseContainer: DockerContainer =
-    dockerConfig.as[DockerConfig]("docker.hbase").toDockerContainer()
+  val hbaseContainer: DockerContainer = {
+    dockerConfig
+      .as[DockerConfig]("docker.hbase")
+      .toDockerContainer()
+  }
 
   abstract override def dockerContainers: List[DockerContainer] = hbaseContainer :: super.dockerContainers
 

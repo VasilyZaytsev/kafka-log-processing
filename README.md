@@ -71,7 +71,7 @@ Default [configuration file is reference.conf](./src/main/resources/reference.co
 #### Docker
 **Build:**
 ````
-docker build -t local-hbase .
+docker build -t local-hbase-img .
 ````
 
 **Run:**
@@ -94,7 +94,8 @@ run-image
 **Connect:**
 ````
 docker run --rm -it --link IMAGE_ID:hbase-docker local-hbase hbase shell
-http://hbase-docker:60010/master-status
+docker run --rm -it --link test_local_hbase:hbase-docker local-hbase-img hbase shell
+http://hbase-docker:16010/master-status
 
 ````
 for exposed ports see run-image and dockerfile

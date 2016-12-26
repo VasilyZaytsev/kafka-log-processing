@@ -6,13 +6,18 @@ import ru.ps.onef.research.kafka.{ConsoleLogsConsumer, LogsProducer}
 import ru.ps.onef.research.kafka.domain.LogMessage
 import ru.ps.onef.research.kafka.domain.LogMessageLevel._
 import LogsProducer._
+import com.whisk.docker.impl.dockerjava.DockerKitWithFix
+import com.whisk.docker.scalatest.DockerTestKit
+import org.apache.hadoop.hbase.client._
+import org.apache.hadoop.hbase.util.Bytes
+import org.apache.hadoop.hbase._
 import org.apache.storm.{Config, ILocalCluster, Testing}
 import org.apache.storm.kafka.{KafkaSpout, SpoutConfig, ZkHosts}
 import org.apache.storm.testing.{MkClusterParam, TestJob}
 import org.apache.storm.topology.TopologyBuilder
 import org.scalatest.concurrent.ScalaFutures
-import org.scalatest.time.{Second, Seconds, Span}
-import ru.ps.onef.research.docker.{DockerHBaseService, DockerTestKitDockerEnv}
+import org.scalatest.time.{Millis, Second, Seconds, Span}
+import ru.ps.onef.research.docker.DockerHBaseService
 import ru.ps.onef.research.storm.SimpleUpdateBolt
 
 import scala.concurrent.{Await, Future}
@@ -24,7 +29,7 @@ import scala.concurrent.ExecutionContext.Implicits.global
   */
 class TestProducerConsumer extends WordSpecLike
   with Matchers with BeforeAndAfterAll with ScalaFutures
-  with DockerTestKitDockerEnv with DockerHBaseService {
+  with DockerKitWithFix with DockerTestKit with DockerHBaseService {
 
   val outputTopicName = "processed-logs"
   val inputTopicName = "raw-logs"
@@ -32,6 +37,11 @@ class TestProducerConsumer extends WordSpecLike
 
   private var stormConsumerInstance: Option[ConsoleLogsConsumer] = None
   private var consumerInstance: Option[ConsoleLogsConsumer] = None
+
+  override def dockerInitPatienceInterval =
+    PatienceConfig(scaled(Span(30, Seconds)), scaled(Span(10, Millis)))
+
+  override val StartContainersTimeout: FiniteDuration = 30 seconds
 
   override def beforeAll {
     super.beforeAll()
@@ -52,12 +62,52 @@ class TestProducerConsumer extends WordSpecLike
     super.afterAll()
   }
 
-  implicit val pc = PatienceConfig(Span(20, Seconds), Span(1, Second))
+  implicit val pc = PatienceConfig(Span(30, Seconds), Span(1, Second))
 
-  "all containers" should {
-    "be ready at the same time" in {
+  "Docker test" should {
+    "Start all containers and await until they will be ready" in {
       dockerContainers.map(_.image).foreach(println)
       dockerContainers.forall(isContainerReady(_).futureValue) shouldBe true
+    }
+  }
+
+  "Hbase test" should {
+    "create connection and execute select" in {
+      val conf = HBaseConfiguration.create()
+      import HConstants._
+      conf.set(ZOOKEEPER_QUORUM, "hbase-docker")
+      val connection = ConnectionFactory.createConnection(conf)
+
+      HBaseAdmin.checkHBaseAvailable(conf)
+
+      val admin = connection.getAdmin
+
+      // list the tables
+      val listtables=admin.listTables()
+      listtables.foreach(println)
+
+      val tableName = TableName.valueOf("test_table")
+      if (admin.tableExists(tableName)){
+        admin.disableTable(tableName)
+        admin.deleteTable(tableName)
+      }
+      val tableDesc = new HTableDescriptor(tableName)
+      val idsColumnFamilyDesc = new HColumnDescriptor(Bytes.toBytes("ids"))
+      tableDesc.addFamily(idsColumnFamilyDesc)
+      admin.createTable(tableDesc)
+
+      // let's insert some data in 'mytable' and get the row
+      val table = connection.getTable( tableName )
+
+      val theput= new Put(Bytes.toBytes("rowkey1"))
+
+      theput.addColumn(Bytes.toBytes("ids"),Bytes.toBytes("id1"),Bytes.toBytes("one"))
+      table.put(theput)
+
+      val theget= new Get(Bytes.toBytes("rowkey1"))
+      val result=table.get(theget)
+      val value=result.value()
+      println(Bytes.toString(value))
     }
   }
 
@@ -169,7 +219,7 @@ class TestProducerConsumer extends WordSpecLike
           LogsProducer.send(List(stopMessage))(inputTopicName)
 
           //Important NOTE!
-          //Next await is important, since if we finish this code before storm process all messages
+          //Next await is important, since if we finish this code block before storm process all messages
           //it will cause to test fail!
           stormConsumerResult = Some(Await.result(fResultOpt.get, 10.seconds))
         }
