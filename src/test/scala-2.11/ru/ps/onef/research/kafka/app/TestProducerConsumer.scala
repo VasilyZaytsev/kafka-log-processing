@@ -72,7 +72,7 @@ class TestProducerConsumer extends WordSpecLike
   }
 
   "Hbase test" should {
-    "create connection and execute select" in {
+    "create connection and execute CRUD" in {
       val conf = HBaseConfiguration.create()
       import HConstants._
       conf.set(ZOOKEEPER_QUORUM, "hbase-docker")
@@ -99,15 +99,17 @@ class TestProducerConsumer extends WordSpecLike
       // let's insert some data in 'mytable' and get the row
       val table = connection.getTable( tableName )
 
-      val theput= new Put(Bytes.toBytes("rowkey1"))
+      val thePut= new Put(Bytes.toBytes("rowkey1"))
 
-      theput.addColumn(Bytes.toBytes("ids"),Bytes.toBytes("id1"),Bytes.toBytes("one"))
-      table.put(theput)
+      val putValue = "one"
+      thePut.addColumn(Bytes.toBytes("ids"),Bytes.toBytes("id1"),Bytes.toBytes(putValue))
+      table.put(thePut)
 
-      val theget= new Get(Bytes.toBytes("rowkey1"))
-      val result=table.get(theget)
-      val value=result.value()
-      println(Bytes.toString(value))
+      val theGet = new Get(Bytes.toBytes("rowkey1"))
+      val result = table.get(theGet)
+      val getValue = Bytes.toString(result.value)
+
+      getValue shouldEqual putValue
     }
   }
 
