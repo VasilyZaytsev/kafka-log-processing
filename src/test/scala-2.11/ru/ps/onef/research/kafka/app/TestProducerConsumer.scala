@@ -1,24 +1,32 @@
 package ru.ps.onef.research.kafka.app
 
+import java.util.concurrent.TimeUnit
+
 import org.scalatest.{BeforeAndAfterAll, Matchers, WordSpecLike}
 import ru.ps.onef.research.embeded.{EKafka, EZooKeeper}
 import ru.ps.onef.research.kafka.{ConsoleLogsConsumer, LogsProducer}
 import ru.ps.onef.research.kafka.domain.LogMessage
 import ru.ps.onef.research.kafka.domain.LogMessageLevel._
 import LogsProducer._
+import com.typesafe.config.ConfigFactory
 import com.whisk.docker.impl.dockerjava.DockerKitWithFix
 import com.whisk.docker.scalatest.DockerTestKit
 import org.apache.hadoop.hbase.client._
 import org.apache.hadoop.hbase.util.Bytes
 import org.apache.hadoop.hbase._
-import org.apache.storm.{Config, ILocalCluster, Testing}
+import org.apache.storm.kafka.trident.{TransactionalTridentKafkaSpout, TridentKafkaConfig}
+import org.apache.storm.{Config, LocalCluster}
 import org.apache.storm.kafka.{KafkaSpout, SpoutConfig, ZkHosts}
-import org.apache.storm.testing.{MkClusterParam, TestJob}
 import org.apache.storm.topology.TopologyBuilder
+import org.apache.storm.topology.base.BaseWindowedBolt
+import org.apache.storm.trident.TridentTopology
+import org.apache.storm.trident.windowing.InMemoryWindowsStoreFactory
+import org.apache.storm.tuple.Fields
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.time.{Millis, Second, Seconds, Span}
+import play.api.libs.json.Json
 import ru.ps.onef.research.docker.DockerHBaseService
-import ru.ps.onef.research.storm.SimpleUpdateBolt
+import ru.ps.onef.research.storm.{LogsSWindowAgg, SimpleUpdateBolt}
 
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration._
@@ -31,6 +39,10 @@ class TestProducerConsumer extends WordSpecLike
   with Matchers with BeforeAndAfterAll with ScalaFutures
   with DockerKitWithFix with DockerTestKit with DockerHBaseService {
 
+  private val config = ConfigFactory load()
+  private val stormConf = config getConfig "log.storm.bolt"
+  private val dockerConf = config getConfig "docker.hbase"
+
   val outputTopicName = "processed-logs"
   val inputTopicName = "raw-logs"
   val stopMessage = LogMessage(DEBUG, "Last message", 0L)
@@ -38,10 +50,21 @@ class TestProducerConsumer extends WordSpecLike
   private var stormConsumerInstance: Option[ConsoleLogsConsumer] = None
   private var consumerInstance: Option[ConsoleLogsConsumer] = None
 
+  private val hbaseConfig = {
+    val conf = HBaseConfiguration.create()
+    import HConstants._
+    conf.set(ZOOKEEPER_QUORUM, dockerConf getString "image-host")
+    conf
+  }
+
   override def dockerInitPatienceInterval =
     PatienceConfig(scaled(Span(30, Seconds)), scaled(Span(10, Millis)))
 
-  override val StartContainersTimeout: FiniteDuration = 30 seconds
+  override val StartContainersTimeout: FiniteDuration = 90.seconds
+
+  private lazy val localStormCluster = {
+    new LocalCluster(EZooKeeper().hostname, EZooKeeper().port.toLong)
+  }
 
   override def beforeAll {
     super.beforeAll()
@@ -56,6 +79,8 @@ class TestProducerConsumer extends WordSpecLike
   }
 
   override def afterAll {
+    localStormCluster.shutdown()
+    ConnectionFactory.createConnection(hbaseConfig).getAdmin.shutdown()
     Seq(consumerInstance, stormConsumerInstance).foreach(_.foreach(_.shutdown()))
     EKafka().stop()
     EZooKeeper().stop()
@@ -73,13 +98,8 @@ class TestProducerConsumer extends WordSpecLike
 
   "Hbase test" should {
     "create connection and execute CRUD" in {
-      val conf = HBaseConfiguration.create()
-      import HConstants._
-      conf.set(ZOOKEEPER_QUORUM, "hbase-docker")
-      val connection = ConnectionFactory.createConnection(conf)
-
-      HBaseAdmin.checkHBaseAvailable(conf)
-
+      HBaseAdmin.checkHBaseAvailable(hbaseConfig)
+      val connection = ConnectionFactory.createConnection(hbaseConfig)
       val admin = connection.getAdmin
 
       // list the tables
@@ -99,15 +119,19 @@ class TestProducerConsumer extends WordSpecLike
       // let's insert some data in 'mytable' and get the row
       val table = connection.getTable( tableName )
 
-      val thePut= new Put(Bytes.toBytes("rowkey1"))
-
-      val putValue = "one"
-      thePut.addColumn(Bytes.toBytes("ids"),Bytes.toBytes("id1"),Bytes.toBytes(putValue))
-      table.put(thePut)
+      val putValue = "one1"
+      for (index <- 1 to 3){
+        val thePut= new Put(Bytes.toBytes(s"rowkey$index"))
+        thePut.addColumn(Bytes.toBytes("ids"),Bytes.toBytes(s"id$index"),Bytes.toBytes(s"one$index"))
+        table.put(thePut)
+      }
 
       val theGet = new Get(Bytes.toBytes("rowkey1"))
       val result = table.get(theGet)
       val getValue = Bytes.toString(result.value)
+
+      table.close()
+      connection.close()
 
       getValue shouldEqual putValue
     }
@@ -191,41 +215,24 @@ class TestProducerConsumer extends WordSpecLike
         conf
       }
 
-      val stormTestClusterParameters = {
-        val mkClusterParam = new MkClusterParam
-        mkClusterParam.setSupervisors(2)
-        val stormClusterConfig = new Config
+      val topologyName = "storm-kafka-integration-test"
+      localStormCluster.submitTopology(topologyName, topologyConfig, topology)
 
-        import scala.collection.JavaConverters._
-        stormClusterConfig.put(Config.STORM_ZOOKEEPER_SERVERS, List(EZooKeeper().hostname).asJava)
-        stormClusterConfig.put(Config.STORM_ZOOKEEPER_PORT, EZooKeeper().port: Integer)
+      val batchSize = 1
 
-        mkClusterParam.setDaemonConf(stormClusterConfig)
-        mkClusterParam
-      }
-
-      Testing.withLocalCluster(stormTestClusterParameters, new TestJob() {
-        override def run(stormCluster: ILocalCluster) {
-          val topologyName = "storm-kafka-integration-test"
-          stormCluster.submitTopology(topologyName, topologyConfig, topology)
-
-          val batchSize = 1
-
-          (1 to stormTotalAmount).toList
-            .map { n => LogMessage(TRACE, "Message " + n, 0L) }
-            .grouped(batchSize)
-            .foreach { listMsgs =>
-            LogsProducer.send(listMsgs)(inputTopicName)
-          }
-
-          LogsProducer.send(List(stopMessage))(inputTopicName)
-
-          //Important NOTE!
-          //Next await is important, since if we finish this code block before storm process all messages
-          //it will cause to test fail!
-          stormConsumerResult = Some(Await.result(fResultOpt.get, 10.seconds))
+      (1 to stormTotalAmount).toList
+        .map { n => LogMessage(TRACE, "Message " + n, 0L) }
+        .grouped(batchSize)
+        .foreach { listMsgs =>
+          LogsProducer.send(listMsgs)(inputTopicName)
         }
-      })
+
+      LogsProducer.send(List(stopMessage))(inputTopicName)
+
+      //Important NOTE!
+      //Next await is important, since if we finish this code block before storm process all messages
+      //it will cause to test fail!
+      stormConsumerResult = Some(Await.result(fResultOpt.get, 10.seconds))
     }
 
     "get result from Consumer and Result should be expected size" in {
@@ -236,4 +243,126 @@ class TestProducerConsumer extends WordSpecLike
     }
 
   }
+
+  "Trident topology test" should {
+    val hbaseTableName = stormConf getString "table.name"
+    val windowLength = stormConf getInt "window.length.secs"
+    val windowLengthDuration = new BaseWindowedBolt.Duration(windowLength, TimeUnit.SECONDS)
+    val windowSlideDuration = new BaseWindowedBolt.Duration(stormConf getInt "window.slide.secs", TimeUnit.SECONDS)
+
+    def kafkaSpoutBaseConfig(zookeeperConnect: String, inputTopic: String) = {
+      val spoutConfig = new TridentKafkaConfig(new ZkHosts(zookeeperConnect), inputTopic)
+      spoutConfig.startOffsetTime = kafka.api.OffsetRequest.EarliestTime
+      spoutConfig
+    }
+
+    "check HBase availability and create table if it doesn't exist" in {
+      HBaseAdmin.checkHBaseAvailable(hbaseConfig)
+      val conn = ConnectionFactory.createConnection(hbaseConfig)
+      try {
+        val admin = conn.getAdmin
+        val tableName = TableName.valueOf(hbaseTableName)
+
+        if (admin.tableExists(tableName)){
+          admin.disableTable(tableName)
+          admin.deleteTable(tableName)
+        }
+        val tableDesc = new HTableDescriptor(tableName)
+        val columnFamilyDesc = new HColumnDescriptor(Bytes.toBytes("data"))
+        tableDesc.addFamily(columnFamilyDesc)
+        admin.createTable(tableDesc)
+      }
+      finally {
+        conn.close()
+      }
+    }
+
+    "build topology and deploy it on local cluster" in {
+      val topology = new TridentTopology()
+      val kafkaSpoutId = "kafka-trident-spout"
+      val kafkaSpoutConfig = kafkaSpoutBaseConfig(EZooKeeper().connectString, inputTopicName)
+      val kafkaSpout = new TransactionalTridentKafkaSpout(kafkaSpoutConfig)
+
+
+      topology.newStream(kafkaSpoutId, kafkaSpout)
+        .slidingWindow(
+          windowLengthDuration,
+          windowSlideDuration,
+          new InMemoryWindowsStoreFactory(),
+          new Fields("bytes"),
+          new LogsSWindowAgg("bytes"),
+          new Fields("bytes")
+        )
+
+      //TODO Implement Error alert sending
+//      val kafkaSinkBoltId = "storm-agg-bolt"
+//      val kafkaSinkBolt = new LogsSWindowBolt(hbaseConfig)
+//      withTumblingWindow(BaseWindowedBolt.Duration duration)
+////      val kafkaSinkBolt = new ErrorLogsWindowBolt()
+////      withWindow(Duration windowLength, Duration slidingInterval)
+//      topology.setBolt(kafkaSinkBoltId, kafkaSinkBolt).globalGrouping(kafkaSpoutId)
+//      val topology = topology.createTopology()
+
+      val topologyConfig = {
+        new Config
+      }
+
+      val topologyName = "storm-kafka-trident-topology-test"
+      localStormCluster.submitTopology(topologyName, topologyConfig, topology.build())
+
+      val stormTotalAmount = 100000
+      val batchSize = stormTotalAmount / 10
+      val _18march2005 = 1111111111L
+
+      (1 to stormTotalAmount)
+        .map { n => LogMessage(TRACE, "Message " + n, _18march2005 + n) }
+        .grouped(batchSize)
+        .foreach { listMsgs =>
+          LogsProducer.send(listMsgs.toList)(inputTopicName)
+          Thread.sleep( 9.seconds.toMillis )
+        }
+
+      Thread.sleep( 15.seconds.toMillis )
+
+      val msg = LogMessage(TRACE, "Message " + 1, _18march2005 + 1)
+      println(s"!!!!!Here is how should looks like our json \n${Json.stringify(Json.toJson(msg))}")
+    }
+
+    "get result from HBase and Result should be as expected" in {
+      import collection.JavaConverters._
+
+      val conn = ConnectionFactory.createConnection(hbaseConfig)
+      val tableName = TableName.valueOf(hbaseTableName)
+      val table = conn getTable tableName
+
+      val scan = new Scan()
+      val rs = table.getScanner(scan)
+      try {
+        val result = rs.asScala.map { row =>
+            s"Key ${Bytes.toString(row.getRow)}${row.rawCells.map{ cell =>
+                val family = Bytes.toString(cell.getFamilyArray, cell.getFamilyOffset, cell.getFamilyLength)
+                val qualifier = f"${Bytes.toString(cell.getQualifierArray, cell.getQualifierOffset, cell.getQualifierLength)}%10s"
+                val value = Bytes.toString(cell.getValueArray, cell.getValueOffset, cell.getValueLength)
+                s"\ncf[$family].cq[$qualifier] = [$value]"
+              }.mkString
+            }"
+        }.toSeq
+
+        result should have size 10
+        result.head shouldBe List(
+          "Key www.example.com_9223372035743564696",
+          "\ncf[data].cq[     TRACE] = [10000]",
+          "\ncf[data].cq[      rate] = [1000.0]",
+          "\ncf[data].cq[        ts] = [1111211111]",
+          "\ncf[data].cq[       url] = [www.example.com]").mkString
+
+      } finally {
+        rs.close()  // always close the ResultScanner!
+        table.close()
+        conn.close()
+      }
+    }
+
+  }
+
 }

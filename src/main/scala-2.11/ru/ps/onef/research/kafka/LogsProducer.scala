@@ -19,8 +19,11 @@ object LogsProducer {
     new KafkaProducer[String, String](utils.propsFromConfig(conf getConfig "log.producer.config"))
   }
 
-  def send(message: List[LogMessage])(implicit topic: String): Seq[Future[RecordMetadata]] = {
-    send(Seq(Json.stringify(Json.toJson(message))))(topic)
+  def send(messages: List[LogMessage])(implicit topic: String): Seq[Future[RecordMetadata]] = {
+    if (messages.nonEmpty)
+      send(Seq(Json.stringify(Json.toJson(messages))))(topic)
+    else
+      Seq.empty
   }
 
   def send(message: String)(implicit topic: String): Seq[Future[RecordMetadata]] = send(Seq(message))(topic)

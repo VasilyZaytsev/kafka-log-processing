@@ -5,7 +5,8 @@
 На входе есть Kafka-топик **R1**, куда складываются некие логи. 
 Формат сообщения в топике: 
 JSON-список, в котором >= 0 записей, для каждой из записей ожидаются поля timestamp, host, level и text. **R2**
-Топология скользящим окном длительностью 60 секунд высчитает среднюю частоту поступления (количество событий в секунду) **R4** и 
+Топология скользящим окном длительностью 60 секунд высчитает 
+среднюю частоту поступления (количество событий в секунду) **R4** и 
 общее количество событий по окну для каждого из уровней: TRACE, DEBUG, INFO, WARN, ERROR **R5**. 
 Эти величины пишутся по каждому хосту и уровню в HBase **R8**.
 Если частота поступления по уровню ERROR превышает порог 1 событие в секунду, **R7** 
@@ -95,12 +96,17 @@ run-image
 ````
 docker run --rm -it --link IMAGE_ID:hbase-docker local-hbase hbase shell
 docker run --rm -it --link test_local_hbase:hbase-docker local-hbase-img hbase shell
+
+docker run --rm -it --link vz_local_hbase:hbase-docker vasilyzaytsev/local-hbase hbase shell
+scan 'logs_statistics', {LIMIT => 1, ROWPREFIXFILTER => 'www.example.com' }
+http://stackoverflow.com/questions/39772832/hbase-row-prefix-scan-in-reverse-order-in-hbase
+
 http://hbase-docker:16010/master-status
 
 ````
 for exposed ports see run-image and dockerfile
 
-**Inspired with:**
+**Inspired by:**
 https://github.com/nerdammer/dockers/tree/master/hbase-1.1.0.1
 https://github.com/dajobe/hbase-docker
 
@@ -116,7 +122,23 @@ Fixed with VB update and set volume like
 /c/Users/Vasily.Zaytsev/docker/valume2
 Payattention that folder should be placed at user home
 
+**IMPORTANT!!!**
+Don't use URI for HBase directory path's
+WRONG
+```
+     <name>hbase.rootdir</name>
+     <value>file:////data/hbase</value>
+```
+Correct
+```
+     <name>hbase.rootdir</name>
+     <value>/data/hbase</value>
+```
+
 ## What are done
 * R1
 * R2
-
+* R4
+* R5
+* R8
+* R0

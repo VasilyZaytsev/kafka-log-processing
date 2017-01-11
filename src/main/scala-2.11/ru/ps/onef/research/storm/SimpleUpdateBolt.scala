@@ -12,22 +12,16 @@ import scala.util.{Failure, Success, Try}
 /**
   * Created by Vasily.Zaytsev on 08.12.2016.
   */
-class SimpleUpdateBolt(outputTopicName: String, inputField: String = "bytes") extends BaseBasicBolt {
+class SimpleUpdateBolt(outputTopicName: String, implicit val inputField: String = "bytes") extends BaseBasicBolt {
 
   // Must be transient because Logger is not serializable
-  @transient lazy private val log: Logger = LoggerFactory.getLogger(classOf[SimpleUpdateBolt])
+  @transient lazy private implicit val log: Logger = LoggerFactory.getLogger(classOf[SimpleUpdateBolt])
 
   override def execute(input: Tuple, collector: BasicOutputCollector): Unit = {
-    val readTry = Try(input.getBinaryByField(inputField))
-    readTry match {
-      case Success(bytes) if bytes != null =>
-        val updatedList = ConsoleLogsConsumer.decode(bytes)
-          .map(log => log.copy(description = s"${log.description} processed with ${this.getClass.getName}"))
-
-        LogsProducer.send(updatedList)(outputTopicName)
-      case Success(_) => log.error("Reading from input tuple returned null")
-      case Failure(e) => log.error("Could not read from input tuple: " + Throwables.getStackTraceAsString(e))
+    val updatedList = ConsoleLogsConsumer decodeTuple input map { log =>
+      log.copy(description = s"${log.description} processed with ${this.getClass.getName}")
     }
+    LogsProducer.send(updatedList)(outputTopicName)
   }
 
   override def declareOutputFields(declarer: OutputFieldsDeclarer): Unit = {
