@@ -1,5 +1,6 @@
 package ru.ps.onef.research.kafka.app
 
+import java.time.LocalDateTime
 import java.util.concurrent.TimeUnit
 
 import org.scalatest.{BeforeAndAfterAll, Matchers, WordSpecLike}
@@ -28,9 +29,11 @@ import play.api.libs.json.Json
 import ru.ps.onef.research.docker.DockerHBaseService
 import ru.ps.onef.research.storm.{LogsSWindowAgg, SimpleUpdateBolt}
 
+import scala.collection.mutable
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext.Implicits.global
+import scala.io.{Codec, Source}
 
 /**
   * Created by Vasily.Zaytsev on 06.12.2016.
@@ -39,13 +42,11 @@ class TestProducerConsumer extends WordSpecLike
   with Matchers with BeforeAndAfterAll with ScalaFutures
   with DockerKitWithFix with DockerTestKit with DockerHBaseService {
 
+  import TestProducerConsumer._
+
   private val config = ConfigFactory load()
   private val stormConf = config getConfig "log.storm.bolt"
   private val dockerConf = config getConfig "docker.hbase"
-
-  val outputTopicName = "processed-logs"
-  val inputTopicName = "raw-logs"
-  val stopMessage = LogMessage(DEBUG, "Last message", 0L)
 
   private var stormConsumerInstance: Option[ConsoleLogsConsumer] = None
   private var consumerInstance: Option[ConsoleLogsConsumer] = None
@@ -256,7 +257,7 @@ class TestProducerConsumer extends WordSpecLike
       spoutConfig
     }
 
-    "check HBase availability and create table if it doesn't exist" in {
+    def recreateHBaseTestTable(): Unit = {
       HBaseAdmin.checkHBaseAvailable(hbaseConfig)
       val conn = ConnectionFactory.createConnection(hbaseConfig)
       try {
@@ -277,6 +278,10 @@ class TestProducerConsumer extends WordSpecLike
       }
     }
 
+    "check HBase availability and recreate table, if it exist" in {
+      recreateHBaseTestTable()
+    }
+
     "build topology and deploy it on local cluster" in {
       val topology = new TridentTopology()
       val kafkaSpoutId = "kafka-trident-spout"
@@ -290,7 +295,7 @@ class TestProducerConsumer extends WordSpecLike
           windowSlideDuration,
           new InMemoryWindowsStoreFactory(),
           new Fields("bytes"),
-          new LogsSWindowAgg("bytes"),
+          new LogsSWindowAgg("bytes", onCompleteCallback ),
           new Fields("bytes")
         )
 
@@ -313,19 +318,35 @@ class TestProducerConsumer extends WordSpecLike
       val stormTotalAmount = 100000
       val batchSize = stormTotalAmount / 10
       val _18march2005 = 1111111111L
+      var lastTimesatmp = 0L
 
       (1 to stormTotalAmount)
         .map { n => LogMessage(TRACE, "Message " + n, _18march2005 + n) }
         .grouped(batchSize)
         .foreach { listMsgs =>
-          LogsProducer.send(listMsgs.toList)(inputTopicName)
+          val list = listMsgs.toList
+          LogsProducer.send(list)(inputTopicName)
+
+          val currentMax = list.maxBy(_.ts).ts
+          lastTimesatmp = if (currentMax > lastTimesatmp) currentMax else lastTimesatmp
+
           Thread.sleep( 9.seconds.toMillis )
         }
 
-      Thread.sleep( 15.seconds.toMillis )
+      Await.result( Future {
+        stormConsumerInstance.get.read
+          .takeWhile { !_.headOption.exists(_.ts == lastTimesatmp) }
+      }, 3.seconds)
+    }
 
-      val msg = LogMessage(TRACE, "Message " + 1, _18march2005 + 1)
-      println(s"!!!!!Here is how should looks like our json \n${Json.stringify(Json.toJson(msg))}")
+    def prettifyHBaseRow(row: Result): String = {
+      s"Key ${Bytes.toString(row.getRow)}${row.rawCells.map{ cell =>
+        val family = Bytes.toString(cell.getFamilyArray, cell.getFamilyOffset, cell.getFamilyLength)
+        val qualifier = f"${Bytes.toString(cell.getQualifierArray, cell.getQualifierOffset, cell.getQualifierLength)}%10s"
+        val value = Bytes.toString(cell.getValueArray, cell.getValueOffset, cell.getValueLength)
+        s"\ncf[$family].cq[$qualifier] = [$value]"
+      }.mkString
+      }"
     }
 
     "get result from HBase and Result should be as expected" in {
@@ -338,15 +359,7 @@ class TestProducerConsumer extends WordSpecLike
       val scan = new Scan()
       val rs = table.getScanner(scan)
       try {
-        val result = rs.asScala.map { row =>
-            s"Key ${Bytes.toString(row.getRow)}${row.rawCells.map{ cell =>
-                val family = Bytes.toString(cell.getFamilyArray, cell.getFamilyOffset, cell.getFamilyLength)
-                val qualifier = f"${Bytes.toString(cell.getQualifierArray, cell.getQualifierOffset, cell.getQualifierLength)}%10s"
-                val value = Bytes.toString(cell.getValueArray, cell.getValueOffset, cell.getValueLength)
-                s"\ncf[$family].cq[$qualifier] = [$value]"
-              }.mkString
-            }"
-        }.toSeq
+        val result = rs.asScala.map(prettifyHBaseRow).toSeq
 
         result should have size 10
         result.head shouldBe List(
@@ -363,6 +376,91 @@ class TestProducerConsumer extends WordSpecLike
       }
     }
 
+    "Hard test: check HBase availability and recreate table, if it exist" in {
+      recreateHBaseTestTable()
+    }
+
+    "HARD test: execute" in {
+      val source = Source.fromFile(LogGeneratorConstants.DefaultDatasetPath.toURI)(Codec.UTF8)
+      var counter = 0
+      var lastTimesatmp = 0L
+
+      val start = LocalDateTime.now()
+      println(s"Start sending at $start")
+
+      source.getLines foreach { str =>
+        val listMsgsJson = ConsoleLogsConsumer convert Json.parse(str)
+        LogsProducer.send(listMsgsJson)(inputTopicName)
+
+        if (listMsgsJson.nonEmpty) {
+          val currentMax = listMsgsJson.maxBy(_.ts).ts
+          lastTimesatmp = if (currentMax > lastTimesatmp) currentMax else lastTimesatmp
+        }
+        counter += listMsgsJson.size
+      }
+
+      counter shouldBe 4504736
+
+      Await.result( Future {
+        stormConsumerInstance.get.read
+          .takeWhile { !_.headOption.exists(_.ts == lastTimesatmp) }
+      }, 15.seconds)
+
+      val end = LocalDateTime.now()
+      val duration = java.time.Duration.between(start, end).getSeconds
+      println(s"Complete sending at $end seconds taked $duration")
+      println(s"Total number of messages $counter")
+    }
+
+    "HARD test: check results" in {
+      //Note: This test do not perform any check's since general purpose of this test is a
+      //will this test execute at all and get execution statistics
+      import collection.JavaConverters._
+
+      val conn = ConnectionFactory.createConnection(hbaseConfig)
+      val tableName = TableName.valueOf(hbaseTableName)
+      val table = conn getTable tableName
+
+      val scan = new Scan()
+      val rs = table.getScanner(scan)
+      try {
+        val statistic: mutable.Map[String, (Double, Int)] = mutable.Map.empty
+        var windowsCount = 0
+
+        val result = rs.asScala.foreach { row =>
+          val urlCell = row.getColumnLatestCell(Bytes.toBytes("data"),Bytes.toBytes("url"))
+          val rateCell = row.getColumnLatestCell(Bytes.toBytes("data"),Bytes.toBytes("rate"))
+          val url = Bytes.toString(urlCell.getValueArray, urlCell.getValueOffset, urlCell.getValueLength)
+          val rate: Double = Bytes.toString(rateCell.getValueArray, rateCell.getValueOffset, rateCell.getValueLength).toDouble
+
+          val rateSum: Double = statistic.getOrElse(url, (0D,0))._1 + rate
+          val counter = statistic.getOrElse(url, (0D,0))._2 + 1
+          statistic.update(url,  (rateSum, counter))
+
+          windowsCount += 1
+        }
+
+        val stat = statistic.mapValues {case (rateSum, counter) => rateSum / counter}
+        println(s"Total number of windows is $windowsCount average total rate ${stat.values.sum}")
+        stat.toIterator.foreach(println)
+
+      } finally {
+        rs.close()  // always close the ResultScanner!
+        table.close()
+        conn.close()
+      }
+    }
+
   }
 
+}
+
+object TestProducerConsumer {
+  val outputTopicName = "processed-logs"
+  val inputTopicName = "raw-logs"
+  val stopMessage = LogMessage(DEBUG, "Last message", 0L)
+
+  def onCompleteCallback(timestamp: Long): Unit = {
+    LogsProducer.send(List(LogMessage(DEBUG, "Window completed", timestamp)))(outputTopicName)
+  }
 }

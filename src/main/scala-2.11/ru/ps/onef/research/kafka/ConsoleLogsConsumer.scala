@@ -7,7 +7,7 @@ import com.typesafe.config.ConfigFactory
 import kafka.consumer.{Consumer, ConsumerConfig, Whitelist}
 import org.apache.storm.tuple.ITuple
 import org.slf4j.Logger
-import play.api.libs.json.Json
+import play.api.libs.json.{JsValue, Json}
 import ru.ps.onef.research.kafka.domain.LogMessage
 import ru.ps.onef.research.utils
 
@@ -34,7 +34,8 @@ object ConsoleLogsConsumer {
 
   val defaultTopicName: String = conf getString "log.consumer.topic"
 
-  def decode(msg: Array[Byte]):List[LogMessage] = Json.parse(msg).asOpt[List[LogMessage]].getOrElse(List.empty)
+  def decode(msg: Array[Byte]):List[LogMessage] = convert(Json.parse(msg))
+  def convert(json: JsValue):List[LogMessage] = json.asOpt[List[LogMessage]].getOrElse(List.empty)
 
   def decodeTuple(input: ITuple)(implicit inputField: String, log: Logger): List[LogMessage] =
     Try(input.getBinaryByField(inputField)) match {

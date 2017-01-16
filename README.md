@@ -134,6 +134,13 @@ Correct
      <name>hbase.rootdir</name>
      <value>/data/hbase</value>
 ```
+## Test results
+### Without alerting
+
+| DataSet | Parameters   | Time taked | Rate | Windows count |
+| ------- | ------------ | ---------- | ---- | ---- |
+| 570M Jan 13 16:30 dataset.txt | 2G | 144 | 26302.271 | 234 |
+
 
 ## What are done
 * R1

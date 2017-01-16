@@ -16,7 +16,7 @@ import scala.collection.mutable
 /**
   * Created by Vasily.Zaytsev on 09.01.2017.
   */
-class LogsSWindowAgg(val inputField: String) extends BaseAggregator[AggregationValue] {
+class LogsSWindowAgg(val inputField: String, onCompleteCallBack: Long => Unit = { ts => }) extends BaseAggregator[AggregationValue] {
 
   @transient lazy private implicit val log: Logger = LoggerFactory.getLogger(classOf[LogsSWindowAgg])
 
@@ -85,30 +85,32 @@ class LogsSWindowAgg(val inputField: String) extends BaseAggregator[AggregationV
     } finally {
       table.close()
     }
+
+    onCompleteCallBack(outValue.timestamp)
   }
 
-  /**
-    * Important: no guarantee that this method will be executed and connection will be closed!
-    */
-  override def cleanup(): Unit = {
-    connection.close()
-    super.cleanup()
-  }
-
-  /**
-    * Important: no guarantee that this method will be executed and connection will be closed!
-    */
-  override def finalize(): Unit = {
-    connection.close()
-    super.finalize()
-  }
+//  /**
+//    * Important: no guarantee that this method will be executed and connection will be closed!
+//    */
+//  override def cleanup(): Unit = {
+//    connection.close()
+//    super.cleanup()
+//  }
+//
+//  /**
+//    * Important: no guarantee that this method will be executed and connection will be closed!
+//    */
+//  override def finalize(): Unit = {
+//    connection.close()
+//    super.finalize()
+//  }
 }
 
 object LogsSWindowAgg {
   type Statistic = mutable.Map[LogMessageLevel.Value, Int]
 
   /**
-    * Since this case class is a state for aggregator timestamp declared as var
+    * Since this case class is a state for aggregator, timestamp declared as var
     * @param timestamp timestamp of statistics
     * @param statistics statistics url with counts per level
     */
