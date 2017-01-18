@@ -16,13 +16,13 @@ import scala.collection.mutable
 /**
   * Created by Vasily.Zaytsev on 09.01.2017.
   */
-class LogsSWindowAgg(val inputField: String, onCompleteCallBack: Long => Unit = { ts => }) extends BaseAggregator[AggregationValue] {
+class LogsSWindowAgg(val inputField: String, onCompleteCallBack: (Long, Map[String, LogsSWindowAgg.Statistic]) => Unit = { (ts,map) => }) extends BaseAggregator[AggregationValue] {
 
   @transient lazy private implicit val log: Logger = LoggerFactory.getLogger(classOf[LogsSWindowAgg])
 
   @transient lazy private val config = ConfigFactory load()
   @transient lazy private val dockerConf = config getConfig "docker.hbase"
-  @transient lazy private val stormConf = config getConfig "log.storm.bolt"
+  @transient lazy private val stormConf = config getConfig "log.storm"
   @transient lazy private val windowLength = stormConf getInt "window.length.secs"
   @transient lazy private val hbaseTableName = stormConf getString "table.name"
   @transient lazy private val hbaseConfig = {
@@ -86,24 +86,24 @@ class LogsSWindowAgg(val inputField: String, onCompleteCallBack: Long => Unit = 
       table.close()
     }
 
-    onCompleteCallBack(outValue.timestamp)
+    onCompleteCallBack(outValue.timestamp, outValue.statistics.toMap)
   }
 
-//  /**
-//    * Important: no guarantee that this method will be executed and connection will be closed!
-//    */
-//  override def cleanup(): Unit = {
-//    connection.close()
-//    super.cleanup()
-//  }
-//
-//  /**
-//    * Important: no guarantee that this method will be executed and connection will be closed!
-//    */
-//  override def finalize(): Unit = {
-//    connection.close()
-//    super.finalize()
-//  }
+  /**
+    * Important: no guarantee that this method will be executed and connection will be closed!
+    */
+  override def cleanup(): Unit = {
+    connection.close()
+    super.cleanup()
+  }
+
+  /**
+    * Important: no guarantee that this method will be executed and connection will be closed!
+    */
+  override def finalize(): Unit = {
+    connection.close()
+    super.finalize()
+  }
 }
 
 object LogsSWindowAgg {

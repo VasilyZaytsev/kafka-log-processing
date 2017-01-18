@@ -32,7 +32,7 @@ class LogsSWindowBolt(@transient conf: Configuration, implicit val inputField: S
   }
 
   private val config = ConfigFactory load()
-  private val logConf = config getConfig "log.storm.bolt"
+  private val logConf = config getConfig "log.storm"
   private val windowLength = logConf getInt "window.length.secs"
 
   type Statistic = mutable.Map[LogMessageLevel.Value, Int]

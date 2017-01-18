@@ -15,7 +15,7 @@ import com.whisk.docker.scalatest.DockerTestKit
 import org.apache.hadoop.hbase.client._
 import org.apache.hadoop.hbase.util.Bytes
 import org.apache.hadoop.hbase._
-import org.apache.storm.kafka.trident.{TransactionalTridentKafkaSpout, TridentKafkaConfig}
+import org.apache.storm.kafka.trident.{TransactionalTridentKafkaSpout, TridentKafkaConfig, TridentKafkaUpdater}
 import org.apache.storm.{Config, LocalCluster}
 import org.apache.storm.kafka.{KafkaSpout, SpoutConfig, ZkHosts}
 import org.apache.storm.topology.TopologyBuilder
@@ -25,9 +25,10 @@ import org.apache.storm.trident.windowing.InMemoryWindowsStoreFactory
 import org.apache.storm.tuple.Fields
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.time.{Millis, Second, Seconds, Span}
+import org.slf4j.{Logger, LoggerFactory}
 import play.api.libs.json.Json
 import ru.ps.onef.research.docker.DockerHBaseService
-import ru.ps.onef.research.storm.{LogsSWindowAgg, SimpleUpdateBolt}
+import ru.ps.onef.research.storm.{AlertingWindowAgg, LogsSWindowAgg, SimpleUpdateBolt}
 
 import scala.collection.mutable
 import scala.concurrent.{Await, Future}
@@ -43,12 +44,14 @@ class TestProducerConsumer extends WordSpecLike
   with DockerKitWithFix with DockerTestKit with DockerHBaseService {
 
   import TestProducerConsumer._
-
+  private val logResults: Logger = LoggerFactory.getLogger("storm.test.results.logger")
   private val config = ConfigFactory load()
-  private val stormConf = config getConfig "log.storm.bolt"
+  private val stormConf = config getConfig "log.storm"
   private val dockerConf = config getConfig "docker.hbase"
+  private val alertTopicName = stormConf getString "alert.out.topic.name"
 
   private var stormConsumerInstance: Option[ConsoleLogsConsumer] = None
+  private var alertConsumerInstance: Option[ConsoleLogsConsumer] = None
   private var consumerInstance: Option[ConsoleLogsConsumer] = None
 
   private val hbaseConfig = {
@@ -72,17 +75,18 @@ class TestProducerConsumer extends WordSpecLike
     EZooKeeper()
     EKafka().start()
 
-    Seq(LogsProducer.defaultTopic, outputTopicName, inputTopicName)
+    Seq(LogsProducer.defaultTopic, outputTopicName, inputTopicName, alertTopicName)
       .foreach(EKafka().createTopic(_))
 
     consumerInstance = Some(ConsoleLogsConsumer())
     stormConsumerInstance = Some(ConsoleLogsConsumer(outputTopicName))
+    alertConsumerInstance = Some(ConsoleLogsConsumer(alertTopicName))
   }
 
   override def afterAll {
     localStormCluster.shutdown()
     ConnectionFactory.createConnection(hbaseConfig).getAdmin.shutdown()
-    Seq(consumerInstance, stormConsumerInstance).foreach(_.foreach(_.shutdown()))
+    Seq(consumerInstance, stormConsumerInstance, alertConsumerInstance).foreach(_.foreach(_.shutdown()))
     EKafka().stop()
     EZooKeeper().stop()
     super.afterAll()
@@ -102,10 +106,6 @@ class TestProducerConsumer extends WordSpecLike
       HBaseAdmin.checkHBaseAvailable(hbaseConfig)
       val connection = ConnectionFactory.createConnection(hbaseConfig)
       val admin = connection.getAdmin
-
-      // list the tables
-      val listtables=admin.listTables()
-      listtables.foreach(println)
 
       val tableName = TableName.valueOf("test_table")
       if (admin.tableExists(tableName)){
@@ -234,6 +234,8 @@ class TestProducerConsumer extends WordSpecLike
       //Next await is important, since if we finish this code block before storm process all messages
       //it will cause to test fail!
       stormConsumerResult = Some(Await.result(fResultOpt.get, 10.seconds))
+
+      localStormCluster.killTopology(topologyName)
     }
 
     "get result from Consumer and Result should be expected size" in {
@@ -248,11 +250,15 @@ class TestProducerConsumer extends WordSpecLike
   "Trident topology test" should {
     val hbaseTableName = stormConf getString "table.name"
     val windowLength = stormConf getInt "window.length.secs"
+    val windowSlideLength = stormConf getInt "window.slide.secs"
+    val alertConditionCount = stormConf getInt "alert.condition.count"
+    val alertsAmountPerWindow = alertConditionCount + 1
     val windowLengthDuration = new BaseWindowedBolt.Duration(windowLength, TimeUnit.SECONDS)
-    val windowSlideDuration = new BaseWindowedBolt.Duration(stormConf getInt "window.slide.secs", TimeUnit.SECONDS)
+    val windowSlideDuration = new BaseWindowedBolt.Duration(windowSlideLength, TimeUnit.SECONDS)
+    val alertWindowLengthDuration = new BaseWindowedBolt.Duration(stormConf getInt "window.alert.length.secs", TimeUnit.SECONDS)
 
-    def kafkaSpoutBaseConfig(zookeeperConnect: String, inputTopic: String) = {
-      val spoutConfig = new TridentKafkaConfig(new ZkHosts(zookeeperConnect), inputTopic)
+    def kafkaSpoutBaseConfig(inputTopic: String) = {
+      val spoutConfig = new TridentKafkaConfig(new ZkHosts(EZooKeeper().connectString), inputTopic)
       spoutConfig.startOffsetTime = kafka.api.OffsetRequest.EarliestTime
       spoutConfig
     }
@@ -285,12 +291,12 @@ class TestProducerConsumer extends WordSpecLike
     "build topology and deploy it on local cluster" in {
       val topology = new TridentTopology()
       val kafkaSpoutId = "kafka-trident-spout"
-      val kafkaSpoutConfig = kafkaSpoutBaseConfig(EZooKeeper().connectString, inputTopicName)
-      val kafkaSpout = new TransactionalTridentKafkaSpout(kafkaSpoutConfig)
+      val kafkaSpoutConfig = kafkaSpoutBaseConfig(inputTopicName)
+      val kafkaSpoutSliding = new TransactionalTridentKafkaSpout(kafkaSpoutConfig)
+      val kafkaSpoutTumbling = new TransactionalTridentKafkaSpout(kafkaSpoutConfig)
 
-
-      topology.newStream(kafkaSpoutId, kafkaSpout)
-        .slidingWindow(
+      topology.newStream(s"$kafkaSpoutId-slidingWindow", kafkaSpoutSliding)
+         .slidingWindow(
           windowLengthDuration,
           windowSlideDuration,
           new InMemoryWindowsStoreFactory(),
@@ -299,17 +305,28 @@ class TestProducerConsumer extends WordSpecLike
           new Fields("bytes")
         )
 
-      //TODO Implement Error alert sending
-//      val kafkaSinkBoltId = "storm-agg-bolt"
-//      val kafkaSinkBolt = new LogsSWindowBolt(hbaseConfig)
-//      withTumblingWindow(BaseWindowedBolt.Duration duration)
-////      val kafkaSinkBolt = new ErrorLogsWindowBolt()
-////      withWindow(Duration windowLength, Duration slidingInterval)
-//      topology.setBolt(kafkaSinkBoltId, kafkaSinkBolt).globalGrouping(kafkaSpoutId)
-//      val topology = topology.createTopology()
+      //TODO Implement -> 1. TridentKafkaUpdater
+      topology.newStream(s"$kafkaSpoutId-tumblingWindow", kafkaSpoutTumbling)
+        .tumblingWindow(
+           alertWindowLengthDuration,
+           new InMemoryWindowsStoreFactory(),
+           new Fields("bytes"),
+           new AlertingWindowAgg("bytes"),
+           new Fields("bytes")
+         )
+
+//        .partitionPersist(
+//          stateFactory,
+//          StreamField.of(StreamField.LEVEL, StreamField.ERROR_JSON),
+//          new TridentKafkaUpdater())
+//      withProducerProperties(producerProps)
+//        .withKafkaTopicSelector(new DefaultTopicSelector("alert-topic"))
+//        .withTridentTupleToKafkaMapper(new FieldNameBasedTupleToKafkaMapper(StreamField.LEVEL_STR, StreamField.ERROR_JSON_STR));
+
 
       val topologyConfig = {
-        new Config
+        val conf = new Config
+        conf
       }
 
       val topologyName = "storm-kafka-trident-topology-test"
@@ -324,19 +341,23 @@ class TestProducerConsumer extends WordSpecLike
         .map { n => LogMessage(TRACE, "Message " + n, _18march2005 + n) }
         .grouped(batchSize)
         .foreach { listMsgs =>
-          val list = listMsgs.toList
+
+          val list = (listMsgs ++ List.fill(alertsAmountPerWindow)(LogMessage(ERROR, "ERROR Message " + stormTotalAmount, lastTimesatmp))).toList
           LogsProducer.send(list)(inputTopicName)
 
           val currentMax = list.maxBy(_.ts).ts
           lastTimesatmp = if (currentMax > lastTimesatmp) currentMax else lastTimesatmp
 
-          Thread.sleep( 9.seconds.toMillis )
+          Await.result( Future {
+            stormConsumerInstance.get.read
+              .filter( _.headOption.exists("Window completed" == _.description) )
+              .take(1)
+              .foreach{msg => logResults.info(msg.toString)}
+          }, (windowLength + 1).seconds)
         }
 
-      Await.result( Future {
-        stormConsumerInstance.get.read
-          .takeWhile { !_.headOption.exists(_.ts == lastTimesatmp) }
-      }, 3.seconds)
+      //Wait until current window will empty
+      Thread.sleep( (windowLength + 1).seconds.toMillis )
     }
 
     def prettifyHBaseRow(row: Result): String = {
@@ -361,11 +382,12 @@ class TestProducerConsumer extends WordSpecLike
       try {
         val result = rs.asScala.map(prettifyHBaseRow).toSeq
 
-        result should have size 10
+        result should have size windowLength
         result.head shouldBe List(
           "Key www.example.com_9223372035743564696",
+          "\ncf[data].cq[     ERROR] = [2]",
           "\ncf[data].cq[     TRACE] = [10000]",
-          "\ncf[data].cq[      rate] = [1000.0]",
+          "\ncf[data].cq[      rate] = [1000.2]",
           "\ncf[data].cq[        ts] = [1111211111]",
           "\ncf[data].cq[       url] = [www.example.com]").mkString
 
@@ -373,6 +395,16 @@ class TestProducerConsumer extends WordSpecLike
         rs.close()  // always close the ResultScanner!
         table.close()
         conn.close()
+      }
+
+      val alertsResult = Await.result( Future {
+        alertConsumerInstance.get.read
+          .take(windowLength)
+          .flatten
+          .toList
+      }, 3.seconds)
+      alertsResult.foreach { alert =>
+        alert.description.toInt should be(alertsAmountPerWindow)
       }
     }
 
@@ -386,7 +418,7 @@ class TestProducerConsumer extends WordSpecLike
       var lastTimesatmp = 0L
 
       val start = LocalDateTime.now()
-      println(s"Start sending at $start")
+      logResults.info(s"HARD Start sending at $start")
 
       source.getLines foreach { str =>
         val listMsgsJson = ConsoleLogsConsumer convert Json.parse(str)
@@ -400,16 +432,14 @@ class TestProducerConsumer extends WordSpecLike
       }
 
       counter shouldBe 4504736
-
-      Await.result( Future {
-        stormConsumerInstance.get.read
-          .takeWhile { !_.headOption.exists(_.ts == lastTimesatmp) }
-      }, 15.seconds)
-
+      import java.time._
       val end = LocalDateTime.now()
-      val duration = java.time.Duration.between(start, end).getSeconds
-      println(s"Complete sending at $end seconds taked $duration")
-      println(s"Total number of messages $counter")
+
+      //Wait until current window will empty
+      Thread.sleep( (windowLength + 1).seconds.toMillis )
+
+      logResults.info(s"Complete sending at $end seconds taked ${Duration.between(start, end).getSeconds}")
+      logResults.info(s"Total number of messages $counter")
     }
 
     "HARD test: check results" in {
@@ -441,8 +471,8 @@ class TestProducerConsumer extends WordSpecLike
         }
 
         val stat = statistic.mapValues {case (rateSum, counter) => rateSum / counter}
-        println(s"Total number of windows is $windowsCount average total rate ${stat.values.sum}")
-        stat.toIterator.foreach(println)
+        logResults.info(s"Total number of windows is $windowsCount average total rate ${stat.values.sum}")
+        stat.toIterator.foreach(stat => logResults.info(stat.toString))
 
       } finally {
         rs.close()  // always close the ResultScanner!
@@ -458,9 +488,13 @@ class TestProducerConsumer extends WordSpecLike
 object TestProducerConsumer {
   val outputTopicName = "processed-logs"
   val inputTopicName = "raw-logs"
-  val stopMessage = LogMessage(DEBUG, "Last message", 0L)
 
-  def onCompleteCallback(timestamp: Long): Unit = {
-    LogsProducer.send(List(LogMessage(DEBUG, "Window completed", timestamp)))(outputTopicName)
+  val stopMessage = LogMessage(DEBUG, "Last message", 0L)
+  private val logResults: Logger = LoggerFactory.getLogger("storm.test.results.logger.callback")
+
+  def onCompleteCallback(timestamp: Long, statistics: Map[String, LogsSWindowAgg.Statistic]): Unit = {
+    logResults.info(s"Complete window with timestamp $timestamp statistics: $statistics")
+    val completeMsg = LogMessage(DEBUG, "Window completed", timestamp)
+    LogsProducer.send(List(completeMsg))(outputTopicName)
   }
 }

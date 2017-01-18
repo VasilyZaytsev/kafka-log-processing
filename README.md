@@ -17,6 +17,16 @@ JSON-список, в котором >= 0 записей, для каждой и
 
 Работу системы необходимо покрыть автоматизированными тестами **R0**.
 
+## What are done
+* R1
+* R2
+* R4
+* R5
+* R8
+* R0
+* R3
+* R7
+
 ## How to 
 ### Run test
 All test run in memory and automatically setup infrastructure (Zookeeper, Kafka, Storm) also in memory
@@ -141,11 +151,3 @@ Correct
 | ------- | ------------ | ---------- | ---- | ---- |
 | 570M Jan 13 16:30 dataset.txt | 2G | 144 | 26302.271 | 234 |
 
-
-## What are done
-* R1
-* R2
-* R4
-* R5
-* R8
-* R0
