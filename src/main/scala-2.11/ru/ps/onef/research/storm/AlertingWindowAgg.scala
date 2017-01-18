@@ -1,7 +1,5 @@
 package ru.ps.onef.research.storm
 
-import java.util.concurrent.TimeUnit
-
 import com.typesafe.config.ConfigFactory
 import org.apache.storm.trident.operation.{BaseAggregator, TridentCollector}
 import org.apache.storm.trident.tuple.TridentTuple
@@ -35,7 +33,7 @@ class AlertingWindowAgg(val inputField: String) extends BaseAggregator[mutable.M
 
   override def complete(completeValue: mutable.Map[String, (Long, Int)], collector: TridentCollector): Unit = {
     completeValue.foreach { case (url, (ts, counter)) if counter >= alertConditionCount =>
-      LogsProducer.send(List(LogMessage(ERROR, s"$counter", ts, url)))(alertTopicName)
+      LogsProducer.send(LogMessage(ERROR, s"$counter", ts, url))(alertTopicName)
 //        collector.emit()
     }
   }

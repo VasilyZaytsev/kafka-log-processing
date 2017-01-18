@@ -1,5 +1,7 @@
 package ru.ps.onef.research.storm
 
+import java.time.LocalDateTime
+
 import com.typesafe.config.ConfigFactory
 import org.apache.hadoop.hbase.{HBaseConfiguration, HConstants, TableName}
 import org.apache.hadoop.hbase.client._
@@ -64,6 +66,9 @@ class LogsSWindowAgg(val inputField: String, onCompleteCallBack: (Long, Map[Stri
     val tableName = TableName.valueOf(hbaseTableName)
     val table = connection getTable tableName
 
+//    Pasha metric
+//    var totatlMsgs = 0
+//    val start = LocalDateTime.now()
     try {
       val reverseTimestamps = Long.MaxValue - outValue.timestamp
 
@@ -77,6 +82,7 @@ class LogsSWindowAgg(val inputField: String, onCompleteCallBack: (Long, Map[Stri
         stat.foreach { case (level, count) =>
           thePut.addColumn(Bytes.toBytes("data"),Bytes.toBytes(level.toString),Bytes.toBytes(count.toString))
           total += count
+//          totatlMsgs += count
         }
         val rate = total.toDouble / windowLength
         thePut.addColumn(Bytes.toBytes("data"),Bytes.toBytes("rate"),Bytes.toBytes( rate.toString ) )
@@ -86,6 +92,11 @@ class LogsSWindowAgg(val inputField: String, onCompleteCallBack: (Long, Map[Stri
       table.close()
     }
 
+//    import java.time._
+//    val end = LocalDateTime.now()
+//    val duration = Duration.between(start, end).getNano
+//    val approxRate = 1000000000d / duration
+//    println(s"Window aggregating taked ${Math.round(duration / 1000000d)} count $totatlMsgs Approx throughput ${Math.round(approxRate * totatlMsgs)} ")
     onCompleteCallBack(outValue.timestamp, outValue.statistics.toMap)
   }
 

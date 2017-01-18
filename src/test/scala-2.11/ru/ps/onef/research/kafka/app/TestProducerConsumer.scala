@@ -1,6 +1,7 @@
 package ru.ps.onef.research.kafka.app
 
 import java.time.LocalDateTime
+import java.util.Properties
 import java.util.concurrent.TimeUnit
 
 import org.scalatest.{BeforeAndAfterAll, Matchers, WordSpecLike}
@@ -158,13 +159,13 @@ class TestProducerConsumer extends WordSpecLike
     "create Producer and send message to topic" in {
       val batchSize = 100
 
-      (1 to totalAmount).toList
+      (1 to totalAmount)
         .map { n => LogMessage(TRACE, "Message " + n, 0L) }
         .grouped(batchSize).foreach { listMsgs =>
-        LogsProducer send listMsgs
+        LogsProducer sendSeq listMsgs
       }
 
-      LogsProducer send List(stopMessage)
+      LogsProducer send stopMessage
     }
 
     "get result from Consumer and Result should be expected size" in {
@@ -221,14 +222,14 @@ class TestProducerConsumer extends WordSpecLike
 
       val batchSize = 1
 
-      (1 to stormTotalAmount).toList
+      (1 to stormTotalAmount)
         .map { n => LogMessage(TRACE, "Message " + n, 0L) }
         .grouped(batchSize)
         .foreach { listMsgs =>
-          LogsProducer.send(listMsgs)(inputTopicName)
+          LogsProducer.sendSeq(listMsgs)(inputTopicName)
         }
 
-      LogsProducer.send(List(stopMessage))(inputTopicName)
+      LogsProducer.send(stopMessage)(inputTopicName)
 
       //Important NOTE!
       //Next await is important, since if we finish this code block before storm process all messages
@@ -256,6 +257,7 @@ class TestProducerConsumer extends WordSpecLike
     val windowLengthDuration = new BaseWindowedBolt.Duration(windowLength, TimeUnit.SECONDS)
     val windowSlideDuration = new BaseWindowedBolt.Duration(windowSlideLength, TimeUnit.SECONDS)
     val alertWindowLengthDuration = new BaseWindowedBolt.Duration(stormConf getInt "window.alert.length.secs", TimeUnit.SECONDS)
+    val tridentTopologyName = "storm-kafka-trident-topology-test"
 
     def kafkaSpoutBaseConfig(inputTopic: String) = {
       val spoutConfig = new TridentKafkaConfig(new ZkHosts(EZooKeeper().connectString), inputTopic)
@@ -305,6 +307,9 @@ class TestProducerConsumer extends WordSpecLike
           new Fields("bytes")
         )
 
+//      val producerProps = new Properties()
+//      producerProps.put("bootstrap.servers", "192.168.173.131:9092")
+
       //TODO Implement -> 1. TridentKafkaUpdater
       topology.newStream(s"$kafkaSpoutId-tumblingWindow", kafkaSpoutTumbling)
         .tumblingWindow(
@@ -329,24 +334,19 @@ class TestProducerConsumer extends WordSpecLike
         conf
       }
 
-      val topologyName = "storm-kafka-trident-topology-test"
-      localStormCluster.submitTopology(topologyName, topologyConfig, topology.build())
+      localStormCluster.submitTopology(tridentTopologyName, topologyConfig, topology.build())
 
       val stormTotalAmount = 100000
       val batchSize = stormTotalAmount / 10
       val _18march2005 = 1111111111L
-      var lastTimesatmp = 0L
 
       (1 to stormTotalAmount)
         .map { n => LogMessage(TRACE, "Message " + n, _18march2005 + n) }
         .grouped(batchSize)
         .foreach { listMsgs =>
 
-          val list = (listMsgs ++ List.fill(alertsAmountPerWindow)(LogMessage(ERROR, "ERROR Message " + stormTotalAmount, lastTimesatmp))).toList
-          LogsProducer.send(list)(inputTopicName)
-
-          val currentMax = list.maxBy(_.ts).ts
-          lastTimesatmp = if (currentMax > lastTimesatmp) currentMax else lastTimesatmp
+          val list = listMsgs ++ List.fill(alertsAmountPerWindow)(LogMessage(ERROR, "ERROR Message " + stormTotalAmount, listMsgs.head.ts))
+          LogsProducer.sendSeq(list)(inputTopicName)
 
           Await.result( Future {
             stormConsumerInstance.get.read
@@ -357,7 +357,7 @@ class TestProducerConsumer extends WordSpecLike
         }
 
       //Wait until current window will empty
-      Thread.sleep( (windowLength + 1).seconds.toMillis )
+      Thread.sleep( (windowLength + windowSlideLength).seconds.toMillis )
     }
 
     def prettifyHBaseRow(row: Result): String = {
@@ -422,7 +422,7 @@ class TestProducerConsumer extends WordSpecLike
 
       source.getLines foreach { str =>
         val listMsgsJson = ConsoleLogsConsumer convert Json.parse(str)
-        LogsProducer.send(listMsgsJson)(inputTopicName)
+        LogsProducer.sendSeq(listMsgsJson)(inputTopicName)
 
         if (listMsgsJson.nonEmpty) {
           val currentMax = listMsgsJson.maxBy(_.ts).ts
@@ -431,15 +431,17 @@ class TestProducerConsumer extends WordSpecLike
         counter += listMsgsJson.size
       }
 
-      counter shouldBe 4504736
       import java.time._
       val end = LocalDateTime.now()
 
-      //Wait until current window will empty
-      Thread.sleep( (windowLength + 1).seconds.toMillis )
-
       logResults.info(s"Complete sending at $end seconds taked ${Duration.between(start, end).getSeconds}")
       logResults.info(s"Total number of messages $counter")
+
+      counter shouldBe 4504736
+
+      //Wait until current window will empty
+      Thread.sleep( (windowLength + windowSlideLength).seconds.toMillis )
+      localStormCluster.killTopology(tridentTopologyName)
     }
 
     "HARD test: check results" in {
@@ -495,6 +497,6 @@ object TestProducerConsumer {
   def onCompleteCallback(timestamp: Long, statistics: Map[String, LogsSWindowAgg.Statistic]): Unit = {
     logResults.info(s"Complete window with timestamp $timestamp statistics: $statistics")
     val completeMsg = LogMessage(DEBUG, "Window completed", timestamp)
-    LogsProducer.send(List(completeMsg))(outputTopicName)
+    LogsProducer.send(completeMsg)(outputTopicName)
   }
 }

@@ -27,56 +27,6 @@ JSON-список, в котором >= 0 записей, для каждой и
 * R3
 * R7
 
-## How to 
-### Run test
-All test run in memory and automatically setup infrastructure (Zookeeper, Kafka, Storm) also in memory
-Accordance to support docker console environment should be setup with docker settings 
-```
-sbt test
-```
-
-### Start environment
-
-1. Start Zookeeper
-
-    ````
-    cd %KAFKA_HOME
-    > bin\windows\zookeeper-server-start.bat config\zookeeper.properties
-    ````
-1. Start Kafka
-
-    ````
-    cd %KAFKA_HOME
-    > dir bin\windows\kafka-server-start.bat config\server.properties
-    ````
-    
-### Run application 
-Before run applications environment should be started 
-
-1. From project root folder
-
-    ```
-    > sbt run
-    Multiple main classes detected, select one to run:
-    
-     [1] ru.ps.onef.research.kafka.app.LogsConsumerApp
-     [2] ru.ps.onef.research.kafka.app.LogsProducerApp
-    
-    Enter number: > 1 (Firstly start consumer)
-    
-    > sbt run
-    Multiple main classes detected, select one to run:
-    
-     [1] ru.ps.onef.research.kafka.app.LogsConsumerApp
-     [2] ru.ps.onef.research.kafka.app.LogsProducerApp
-    
-    Enter number: > 2 (Secondly start producer)
-    ```
-    
-### Configure 
-For project configuration used [typesafe config](https://github.com/typesafehub/config)
-Default [configuration file is reference.conf](./src/main/resources/reference.conf)
-
 ### HBase
 
 #### Docker
@@ -144,10 +94,78 @@ Correct
      <name>hbase.rootdir</name>
      <value>/data/hbase</value>
 ```
+
+## How to 
+### Run test
+All test run in memory and automatically setup infrastructure (Zookeeper, Kafka, Storm) also in memory
+Accordance to support docker console environment should be setup with docker settings
+HBase also will be started automatically but docker machine should be started and 
+test should be started from console with docker environment awareness. As described in HBase Run section.   
+ 
+```
+sbt test
+```
+
+### Start environment
+
+1. Start Zookeeper
+
+    ````
+    cd %KAFKA_HOME
+    > bin\windows\zookeeper-server-start.bat config\zookeeper.properties
+    ````
+1. Start Kafka
+
+    ````
+    cd %KAFKA_HOME
+    > dir bin\windows\kafka-server-start.bat config\server.properties
+    ````
+    
+### Run application 
+Before run applications environment should be started 
+
+1. From project root folder
+
+    ```
+    > sbt run
+    Multiple main classes detected, select one to run:
+    
+     [1] ru.ps.onef.research.kafka.app.LogsConsumerApp
+     [2] ru.ps.onef.research.kafka.app.LogsProducerApp
+    
+    Enter number: > 1 (Firstly start consumer)
+    
+    > sbt run
+    Multiple main classes detected, select one to run:
+    
+     [1] ru.ps.onef.research.kafka.app.LogsConsumerApp
+     [2] ru.ps.onef.research.afka.app.LogsProducerApp
+    
+    Enter number: > 2 (Secondly start producer)
+    ```
+    
+### Configure 
+For project configuration used [typesafe config](https://github.com/typesafehub/config)
+Default [configuration file is reference.conf](./src/main/resources/reference.conf)
+
 ## Test results
-### Without alerting
+### DataSet 
 
-| DataSet | Parameters   | Time taked | Rate | Windows count |
-| ------- | ------------ | ---------- | ---- | ---- |
-| 570M Jan 13 16:30 dataset.txt | 2G | 144 | 26302.271 | 234 |
+| File name | Creation | Size | Messages |
+| --------- | -------- | ---- | -------- |
+| dataset.txt | Jan 13 16:30 | 570M | 4504736 |
 
+### Execution results
+All results is avarege between 3 execution
+
+| Messages | Parameters   | Time taked | Rate | Windows count | Comment |
+| -------- | ------------ | ---------- | ---- | ------------- | ------- |
+| 4504736 | 2G | 144 | 26302 | 234 | Without alerting + println |
+| 4504736 | 2G | 138 | 28378 | 306 | With simple alerting |
+| 4504736 | 4G | 125 | 31254 | 246 | With simple alerting more stable result |
+| 4504736 | 8G | 95 | 38419 | 198 | With simple alerting actual memory usage 4 GB |
+| 4504736 | 8G G1 | 115 | 33274 | 234 | With simple alerting actual memory usage 3.4 - 5.4 GB |
+| 4504736 | 4G G1 Compressed | 123 | 30501 | 252 | With simple alerting actual memory usage 3.3 GB |
+| 4504736 | 8G G1 Compressed | 117 | 32390 | 234 | With simple alerting actual memory usage 4.2 GB |
+
+On all test CPU load closest to 100%

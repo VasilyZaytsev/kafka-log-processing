@@ -21,7 +21,7 @@ class SimpleUpdateBolt(outputTopicName: String, implicit val inputField: String 
     val updatedList = ConsoleLogsConsumer decodeTuple input map { log =>
       log.copy(description = s"${log.description} processed with ${this.getClass.getName}")
     }
-    LogsProducer.send(updatedList)(outputTopicName)
+    LogsProducer.sendSeq(updatedList)(outputTopicName)
   }
 
   override def declareOutputFields(declarer: OutputFieldsDeclarer): Unit = {
